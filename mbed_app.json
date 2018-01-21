@@ -1,6 +1,15 @@
 {
   "macros": [
-    "MBED_MEM_TRACING_ENABLED",
-    "EDEBUG_UART"
-  ]
+    "NDEBUG=1"
+  ],
+  "target_overrides": {
+    "*": {
+      "platform.stdio-flush-at-exit": false,
+      "target.uart_hwfc": 0,
+      "target.macros_add": [
+        "EDEBUG_UART",
+        "NDEBUG=1"
+      ]
+    }
+  }
 }

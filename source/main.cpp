@@ -7,16 +7,26 @@
 #include <ubirch-mbed-sd-storage/source/SDStorage.h>
 #include <ubirch-mbed-nacl-cm0/source/nacl/armnacl.h>
 #include <msgpack/msgpack.h>
+#include <mbed-os/features/mbedtls/inc/mbedtls/base64.h>
 #include "config.h"
 
 #define VERSION "1.0"
 
-#define UTCP_PORT 80
-#define UTCP_HOST "unsafe.api.ubirch.demo.ubirch.com"
+#ifdef DEMO
+#define UHTTP_PORT 80
+#define UHTTP_HOST "unsafe.api.ubirch.demo.ubirch.com"
 #define UHTTP_URL "http://unsafe.api.ubirch.demo.ubirch.com/api/avatarService/v1/device/update/mpack"
+#define UKEY_SERVICE_PORT 80
 #define UKEY_SERVICE_HOST "unsafe.key.demo.ubirch.com"
 #define UKEY_SERVICE_URL  "http://unsafe.key.demo.ubirch.com/api/keyService/v1/pubkey"
-
+#else
+#define UHTTP_PORT 80
+#define UHTTP_HOST "unsafe.api.ubirch.dev.ubirch.com"
+#define UHTTP_URL "http://unsafe.api.ubirch.dev.ubirch.com/api/avatarService/v1/device/update/mpack"
+#define UKEY_SERVICE_PORT 80
+#define UKEY_SERVICE_HOST "unsafe.key.dev.ubirch.com"
+#define UKEY_SERVICE_URL  "http://unsafe.key.dev.ubirch.com/api/keyService/v0.5/pubkey"
+#endif
 
 #define PRI_KEY_PATH "/ub/prk.bin"
 #define PUB_KEY_PATH "/ub/puk.bin"
@@ -34,7 +44,7 @@ BME280 sensor(I2C_SDA, I2C_SCL);
 M66Interface modem(GSM_UART_TX, GSM_UART_RX, GSM_PWRKEY, GSM_POWER);
 
 int errors = 0;
-int interval = 60;
+int interval = 300 * 1000;
 uint32_t uuid[4];
 unsigned char lastSignature[crypto_sign_BYTES];
 
@@ -50,40 +60,6 @@ int ed25519_sign(const char *buf, size_t len, unsigned char signature[crypto_sig
     crypto_sign(signedMessage, &signedLength, (const unsigned char *) buf, (crypto_uint16) len, pri);
     memcpy(signature, signedMessage, crypto_sign_BYTES);
     free(signedMessage);
-    return 0;
-}
-
-int generate() {
-    memset(pri, 0, sizeof(pri));
-    memset(pub, 0, sizeof(pub));
-
-    if (!sd.getFileSize(PRI_KEY_PATH) || !sd.getFileSize(PUB_KEY_PATH)) {
-        EDEBUG_PRINTF("generating new key pair\r\n");
-        crypto_sign_keypair(pri, pub);
-
-        if (sd.write(PRI_KEY_PATH, pri, sizeof(pri), 1) == 1) {
-            EDEBUG_PRINTF("failed to write "
-                                  PRI_KEY_PATH
-                                  "\r\n");
-        };
-        if (sd.write(PUB_KEY_PATH, pub, sizeof(pub), 1) == 1) {
-            EDEBUG_PRINTF("failed to write "
-                                  PUB_KEY_PATH
-                                  "\r\n");
-        };
-    } else {
-        if (sd.read(PRI_KEY_PATH, pri, sizeof(pri), 1) == sizeof(pri)) {
-            EDEBUG_PRINTF("failed to load "
-                                  PRI_KEY_PATH
-                                  "\r\n");
-        }
-        if (sd.read(PUB_KEY_PATH, pub, sizeof(pub), 1) == sizeof(pri)) {
-            EDEBUG_PRINTF("failed to load "
-                                  PUB_KEY_PATH
-                                  "\r\n");
-        };
-    }
-    EDEBUG_HEX("PUB", pub, sizeof(pub));
     return 0;
 }
 
@@ -116,12 +92,11 @@ void responseHandler(const char *data, size_t length) {
     process_payload(payload);
 }
 
-int transmit(const unsigned char *data, const size_t length) {
-    const char *postURL = UHTTP_URL;
-    TCPSocket *socket = open(UTCP_HOST, UTCP_PORT);
+int transmit(const char *host, const int port, const char *url, const unsigned char *data, const size_t length) {
+    TCPSocket *socket = open(host, static_cast<const uint16_t>(port));
     if (socket != NULL) {
-        HttpRequest *request = new HttpRequest(socket, HTTP_POST, postURL, responseHandler);
-        request->set_header("Content-Type", "application/msgpack");
+        HttpRequest *request = new HttpRequest(socket, HTTP_POST, url, responseHandler);
+        request->set_header("Content-Type", "application/json");
         HttpResponse *response = request->send(data, length);
         int status = 0;
         if (response && response->get_status_code()) {
@@ -133,8 +108,6 @@ int transmit(const unsigned char *data, const size_t length) {
                     break;
                 default:
                     EDEBUG_PRINTF("STATUS %d\r\n", response->get_status_code());
-                    string message = response->get_status_message();
-                    EDEBUG_DUMP("STATUS", (uint8_t *) message.data(), message.size());
                     status = response->get_status_code();
                     break;
             }
@@ -147,6 +120,138 @@ int transmit(const unsigned char *data, const size_t length) {
         return status;
     }
     return -1;
+}
+
+int register_key() {
+    // get the time of creation
+    time_t timestamp = time(NULL);
+    struct tm *tm1 = gmtime(&timestamp);
+    static const char *const timeStamp_template = "%04d-%02d-%02dT%02d:%02d:%02d.%03dZ"; //“2017-05-09T10:25:41.836Z”
+
+    // make a  time string in ISO 8601 format
+    int time_size = snprintf(NULL, 0, timeStamp_template, tm1->tm_year + 1900, tm1->tm_mon + 1, tm1->tm_mday,
+                             tm1->tm_hour, tm1->tm_min, tm1->tm_sec, 0);
+    char *created = new char[time_size + 1];
+    sprintf(created, timeStamp_template, tm1->tm_year + 1900, tm1->tm_mon + 1, tm1->tm_mday,
+            tm1->tm_hour, tm1->tm_min, tm1->tm_sec, 0);
+    EDEBUG_PRINTF("KEY: created = %s\r\n", created);
+
+    // set the validation from to the time of creation
+    char *validNotBefore = new char[time_size + 1];
+    sprintf(validNotBefore, timeStamp_template, tm1->tm_year + 1900, tm1->tm_mon + 1, tm1->tm_mday,
+            tm1->tm_hour, tm1->tm_min, tm1->tm_sec, 0);
+    //TODO same as created time
+    EDEBUG_PRINTF("KEY: validNotBefore = %s\r\n", validNotBefore);
+
+    char *validNotAfter = new char[time_size + 1];
+    sprintf(validNotAfter, timeStamp_template, tm1->tm_year + 1900 + 1, tm1->tm_mon + 1, tm1->tm_mday,
+            tm1->tm_hour, tm1->tm_min, tm1->tm_sec, 0);
+    //TODO same as created time + 1 years
+    EDEBUG_PRINTF("KEY: validNotAfter = %s\r\n", validNotAfter);
+
+    // make a string out of the device id
+    char hwDeviceId[34];
+    int idx = 0;
+    for (unsigned int i = 0; i < sizeof(uuid); i++) {
+        if (idx == 16) hwDeviceId[idx++] = '-';
+        sprintf(hwDeviceId + idx, "%02x", ((uint8_t *) uuid)[i]);
+        idx += 2;
+    }
+    EDEBUG_PRINTF("hwDeviceId = %s\r\n", hwDeviceId);
+
+    char pubKeyEncoded[45];
+    size_t pkelen;
+    EDEBUG_PRINTF("base64: %d, %d\r\n",
+                  mbedtls_base64_encode(reinterpret_cast<unsigned char *>(pubKeyEncoded), 45, &pkelen, pub,
+                                        sizeof(pub)), pkelen);
+
+
+    char *pubKeyId = {""};
+    char *algorithm = {"ECC_ED25519"};
+    char *previousPubKeyId = {""};
+    char *previousPubKeySignature = {""};
+
+    // create the JSON for pubKeyInfo
+    static const char *const pubKeyInfo_template = "{"
+            "\"hwDeviceId\":\"%s\","
+            "\"pubKey\":\"%s\","
+            "\"pubKeyId\":\"%s\","
+            "\"algorithm\":\"%s\","
+            "\"previousPubKeyId\":\"%s\","
+            "\"created\":\"%s\","
+            "\"validNotBefore\":\"%s\","
+            "\"validNotAfter\":\"%s\""
+            "}";
+
+    int pubKeyInfoSize = snprintf(NULL, 0, pubKeyInfo_template, hwDeviceId, pubKeyEncoded, pubKeyId, algorithm,
+                                  previousPubKeyId, created, validNotBefore, validNotAfter);
+    char *pubKeyInfo = new char[pubKeyInfoSize + 1];
+    sprintf(pubKeyInfo, pubKeyInfo_template, hwDeviceId, pubKeyEncoded, pubKeyId, algorithm,
+            previousPubKeyId, created, validNotBefore, validNotAfter
+    );
+    EDEBUG_PRINTF("pubKeyInfo = %s\r\n", pubKeyInfo);
+
+
+    // sign PubKeyInfo
+    unsigned char signature[crypto_sign_BYTES];
+    ed25519_sign(pubKeyInfo, static_cast<size_t>(pubKeyInfoSize), signature);
+    char signatureEncoded[89];
+    size_t selen;
+    EDEBUG_PRINTF("base64: %d\r\n",
+                  mbedtls_base64_encode(reinterpret_cast<unsigned char *>(signatureEncoded), 89, &selen, pub,
+                                        sizeof(pub)));
+
+    static const char *const message_template = "{"
+            "\"pubKeyInfo\":%s,"
+            "\"signature\":\"%s\","
+            "\"previousPubKeySignature\":\"%s\""
+            "}";
+
+    // create the complete JSON
+    int messageSize = snprintf(NULL, 0, message_template, pubKeyInfo, signatureEncoded, previousPubKeySignature);
+    char *message = new char[messageSize + 1];
+    sprintf(message, message_template, pubKeyInfo, signatureEncoded, previousPubKeySignature);
+    EDEBUG_PRINTF("message (%u) = %s\r\n", (uint16_t) strlen((const char *) (message)), message);
+
+
+    transmit(UKEY_SERVICE_HOST, UKEY_SERVICE_PORT, UKEY_SERVICE_URL,
+             reinterpret_cast<const unsigned char *>(message), strlen(message));
+
+    // free the memory
+    delete (created);
+    delete (validNotBefore);
+    delete (validNotAfter);
+    delete (pubKeyInfo);
+
+    return 0;
+}
+
+int generate(bool force) {
+    memset(pri, 0, sizeof(pri));
+    memset(pub, 0, sizeof(pub));
+
+    if (force || !sd.getFileSize(PRI_KEY_PATH) || !sd.getFileSize(PUB_KEY_PATH)) {
+        EDEBUG_PRINTF("generating new key pair\r\n");
+        crypto_sign_keypair(pri, pub);
+        EDEBUG_PRINTF("done.\r\n");
+
+        sd.write(PRI_KEY_PATH, pri, sizeof(pri), 1);
+        sd.write(PUB_KEY_PATH, pub, sizeof(pub), 1);
+        register_key();
+    } else {
+        if (sd.read(PRI_KEY_PATH, pri, sizeof(pri), 1) == sizeof(pri)) {
+            EDEBUG_PRINTF("failed to load "
+                                  PRI_KEY_PATH
+                                  "\r\n");
+        }
+        if (sd.read(PUB_KEY_PATH, pub, sizeof(pub), 1) == sizeof(pri)) {
+            EDEBUG_PRINTF("failed to load "
+                                  PUB_KEY_PATH
+                                  "\r\n");
+        };
+    }
+    EDEBUG_HEX("PUB", pub, sizeof(pub));
+    return 0;
 }
 
 int pack(msgpack_sbuffer *sbuf, int timestamp, int temperature, int humidity, int pressure) {
@@ -229,6 +334,9 @@ void signal(int ms) {
     ledEvent = ledEventQueue.call_every(ms, blink);
 }
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wmissing-noreturn"
+
 int main() {
     EDEBUG_SETUP(NULL);
     EDEBUG_PRINTF("ubirch-example "
@@ -236,27 +344,29 @@ int main() {
                           "\r\n");
 
     ledEventThread.start(callback(&ledEventQueue, &EventQueue::dispatch_forever));
-    signal(50);
 
-    sd.init();
-    generate();
-
-    sensor.initialize();
-
-    while (modem.connect(CELL_APN, CELL_USER, CELL_PWD)) {
-        Thread::wait(5000);
-        EDEBUG_PRINTF("modem connect failed, retry...\r\n");
-    }
-
-    time_t timestamp;
-    modem.getUnixTime(&timestamp);
-    set_time(timestamp);
-
+    // device UUID
     uuid[0] = SIM->UIDH;
     uuid[1] = SIM->UIDMH;
     uuid[2] = SIM->UIDML;
     uuid[3] = SIM->UIDL;
     EDEBUG_HEX("UUID:", (uint8_t *) uuid, sizeof(uuid));
+
+    sd.init();
+    sensor.initialize();
+
+    signal(50);
+    while (modem.connect(CELL_APN, CELL_USER, CELL_PWD)) {
+        Thread::wait(5000);
+        EDEBUG_PRINTF("modem connect failed, retry...\r\n");
+    }
+    time_t timestamp;
+    modem.getUnixTime(&timestamp);
+    set_time(timestamp);
+
+    signal(80);
+    generate(true);
+    signal(0);
 
     memset(lastSignature, 0, 64);
     msgpack_sbuffer sbuf = {};
@@ -279,10 +389,12 @@ int main() {
         pack(&sbuf, timestamp, temperature, humidity, pressure);
 
         EDEBUG_DUMP("MSG", (uint8_t *) sbuf.data, sbuf.size);
-        transmit(reinterpret_cast<const unsigned char *>(sbuf.data), sbuf.size);
+        transmit(UHTTP_HOST, UHTTP_PORT, UHTTP_URL, reinterpret_cast<const unsigned char *>(sbuf.data), sbuf.size);
 
         EDEBUG_PRINTF("Waiting ...\r\n");
         signal(0);
-        Thread::wait(interval * 100);
+        Thread::wait((uint32_t) interval);
     }
 }
+
+#pragma GCC diagnostic pop

@@ -101,7 +101,7 @@ char * process_response(char *response, size_t responseLen,
         while (++index < token_count) {
             if (jsoneq(response, &token[index], P_DEVICE_ID) == 0 && token[index + 1].type == JSMN_STRING) {
                 index++;
-                print_token("D_ID", response, &token[index]);
+                print_token("response id", response, &token[index]);
             } else if (jsoneq(response, &token[index], P_VERSION) == 0 && token[index + 1].type == JSMN_STRING) {
                 index++;
                 if (strncmp(response + token[index].start, PROTOCOL_VERSION_MIN, 3) != 0) {
@@ -113,7 +113,7 @@ char * process_response(char *response, size_t responseLen,
                 }
             } else if (jsoneq(response, &token[index], P_KEY) == 0 && token[index + 1].type == JSMN_STRING) {
                 index++;
-                print_token("key:", response, &token[index]);
+                print_token("public key", response, &token[index]);
 
                 size_t key_length;
                 mbedtls_base64_decode(key, crypto_sign_PUBLICKEYBYTES, &key_length,
@@ -125,7 +125,7 @@ char * process_response(char *response, size_t responseLen,
                 }
             } else if (jsoneq(response, &token[index], P_SIGNATURE) == 0 && token[index + 1].type == JSMN_STRING) {
                 index++;
-                print_token("signature:", response, &token[index]);
+                print_token("signature", response, &token[index]);
 
                 size_t hash_length; // = crypto_sign_BYTES;
                 mbedtls_base64_decode(signature, crypto_sign_BYTES, &hash_length,
@@ -147,7 +147,7 @@ char * process_response(char *response, size_t responseLen,
                 index += 2 * token[index].size;
             } else if (jsoneq(response, &token[index], P_TIMESTAMP) == 0 && token[index + 1].type == JSMN_STRING) {
                 index++;
-                print_token("TimeStamp:", response, &token[index]);
+                print_token("timeStamp:", response, &token[index]);
             } else {
                 // simply ignore unknown keys
                 print_token("unknown key:", response, &token[index]);
@@ -155,7 +155,7 @@ char * process_response(char *response, size_t responseLen,
             }
         }
     } else {
-        EDEBUG_PRINTF("No JSON Object\r\n");
+        EDEBUG_PRINTF("not a json object\r\n");
         errors |= E_JSON_FAILED;
     }
 
