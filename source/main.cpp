@@ -25,7 +25,7 @@
 #define UHTTP_URL "http://unsafe.api.ubirch.dev.ubirch.com/api/avatarService/v1/device/update/mpack"
 #define UKEY_SERVICE_PORT 80
 #define UKEY_SERVICE_HOST "unsafe.key.dev.ubirch.com"
-#define UKEY_SERVICE_URL  "http://unsafe.key.dev.ubirch.com/api/keyService/v0.5/pubkey"
+#define UKEY_SERVICE_URL  "http://unsafe.key.dev.ubirch.com/api/keyService/v1/pubkey"
 #endif
 
 #define PRI_KEY_PATH "/ub/prk.bin"
@@ -198,8 +198,8 @@ int register_key() {
     char signatureEncoded[89];
     size_t selen;
     EDEBUG_PRINTF("base64: %d\r\n",
-                  mbedtls_base64_encode(reinterpret_cast<unsigned char *>(signatureEncoded), 89, &selen, pub,
-                                        sizeof(pub)));
+                  mbedtls_base64_encode(reinterpret_cast<unsigned char *>(signatureEncoded), 89, &selen, signature,
+                                        sizeof(signature)));
 
     static const char *const message_template = "{"
             "\"pubKeyInfo\":%s,"
@@ -288,7 +288,7 @@ int pack(msgpack_sbuffer *sbuf, int timestamp, int temperature, int humidity, in
     msgpack_pack_map(&pk, 4);
     msgpack_pack_raw(&pk, strlen("i"));
     msgpack_pack_raw_body(&pk, "i", strlen("i"));
-    msgpack_pack_int(&pk, interval);
+    msgpack_pack_int(&pk, interval/1000);
 
     msgpack_pack_raw(&pk, strlen("temperature"));
     msgpack_pack_raw_body(&pk, "temperature", strlen("temperature"));
@@ -365,7 +365,7 @@ int main() {
     set_time(timestamp);
 
     signal(80);
-    generate(true);
+    generate(false);
     signal(0);
 
     memset(lastSignature, 0, 64);
