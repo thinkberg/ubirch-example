@@ -1,0 +1,7 @@
+*.iml
+.idea
+config.h
+GettingStarted.html
+CMakeLists.txt
+mbed_config.h
+mbed_settings.py

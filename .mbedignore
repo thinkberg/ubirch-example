@@ -1,0 +1,4 @@
+ubirch-protocol/mbed-os/*
+jsmn/test/*
+jsmn/example/*
+cmake*

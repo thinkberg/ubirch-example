@@ -1,0 +1,6 @@
+{
+  "macros": [
+    "MBED_MEM_TRACING_ENABLED",
+    "EDEBUG_UART"
+  ]
+}
