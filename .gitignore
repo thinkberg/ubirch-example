@@ -1,3 +1,5 @@
+cmake-*
+.DS_Store
 *.iml
 .idea
 config.h
